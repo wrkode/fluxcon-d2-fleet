@@ -1,0 +1,87 @@
+# Application-team tenant: the `workloads` namespace, a service account that
+# may manage VM pools there and nothing else, and the signed web-fleet source.
+# The Kustomization impersonates that service account, so the VMs repository
+# cannot create anything outside SwiftGuestPools in `workloads`.
+apiVersion: fluxcd.controlplane.io/v1
+kind: ResourceSet
+metadata:
+  name: vms
+  namespace: flux-system
+spec:
+  inputs:
+    - tenant: workloads
+      component: web-fleet
+  resources:
+    - apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: << inputs.tenant >>
+    - apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: flux
+        namespace: << inputs.tenant >>
+    - apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role
+      metadata:
+        name: flux-vm-pools
+        namespace: << inputs.tenant >>
+      rules:
+        - apiGroups: ["swift.kubeswift.io"]
+          resources: ["swiftguestpools"]
+          verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    - apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: flux-vm-pools
+        namespace: << inputs.tenant >>
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: Role
+        name: flux-vm-pools
+      subjects:
+        - kind: ServiceAccount
+          name: flux
+          namespace: << inputs.tenant >>
+    - apiVersion: source.toolkit.fluxcd.io/v1
+      kind: OCIRepository
+      metadata:
+        name: << inputs.component >>
+        namespace: << inputs.tenant >>
+      spec:
+        interval: 5m
+        url: oci://ghcr.io/${ARTIFACT_OWNER}/fluxcon-d2-vms/<< inputs.component >>
+        ref:
+          tag: ${ARTIFACT_TAG}
+        verify:
+          provider: cosign
+          matchOIDCIdentity:
+            - issuer: ^https://token\.actions\.githubusercontent\.com$
+              subject: ^https://github\.com/${ARTIFACT_OWNER}/fluxcon-d2-vms/\.github/workflows/${ARTIFACT_SUBJECT_WORKFLOW}\.yaml@${ARTIFACT_SUBJECT_GIT_REF}$
+    - apiVersion: kustomize.toolkit.fluxcd.io/v1
+      kind: Kustomization
+      metadata:
+        name: kubeswift-workloads
+        namespace: << inputs.tenant >>
+      spec:
+        dependsOn:
+          - name: kubeswift-infra
+            namespace: flux-system
+        serviceAccountName: flux
+        targetNamespace: << inputs.tenant >>
+        interval: 30m
+        retryInterval: 1m
+        timeout: 6m
+        sourceRef:
+          kind: OCIRepository
+          name: << inputs.component >>
+        path: ./
+        prune: true
+        wait: true
+        healthCheckExprs:
+          - apiVersion: swift.kubeswift.io/v1alpha1
+            kind: SwiftGuestPool
+            current: >-
+              has(status.readyReplicas) && status.readyReplicas == spec.replicas &&
+              has(status.updatedReplicas) && status.updatedReplicas == spec.replicas &&
+              status.replicas == spec.replicas

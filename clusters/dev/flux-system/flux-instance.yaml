@@ -1,0 +1,49 @@
+# Flux itself, managed by the Flux Operator and synced from this repository's
+# signed OCI artifact (no GitRepository, no Git credentials in the cluster).
+#
+# spec.sync alone does not verify anything. The kustomize patch below adds
+# spec.verify to the root OCIRepository the operator generates, so the fleet
+# artifact itself is accepted only when it was signed by this repository's
+# push-artifact workflow on main. The operator re-applies the patch on every
+# reconcile, so it cannot be dropped silently.
+apiVersion: fluxcd.controlplane.io/v1
+kind: FluxInstance
+metadata:
+  name: flux
+  namespace: flux-system
+spec:
+  distribution:
+    version: "2.10.x"
+    registry: "ghcr.io/fluxcd"
+    artifact: "oci://ghcr.io/controlplaneio-fluxcd/flux-operator-manifests:latest"
+  components:
+    - source-controller
+    - kustomize-controller
+    - helm-controller
+    - notification-controller
+  cluster:
+    type: kubernetes
+    multitenant: false
+    networkPolicy: true
+    domain: "cluster.local"
+  migrateResources: true
+  wait: true
+  sync:
+    kind: OCIRepository
+    url: "oci://ghcr.io/wrkode/fluxcon-d2-fleet"
+    ref: "latest"
+    path: "clusters/dev"
+    interval: 5m
+  kustomize:
+    patches:
+      - target:
+          kind: OCIRepository
+          name: flux-system
+        patch: |
+          - op: add
+            path: /spec/verify
+            value:
+              provider: cosign
+              matchOIDCIdentity:
+                - issuer: ^https://token\.actions\.githubusercontent\.com$
+                  subject: ^https://github\.com/wrkode/fluxcon-d2-fleet/\.github/workflows/push-artifact\.yaml@refs/heads/main$

@@ -1,0 +1,15 @@
+# Cluster-wide variables substituted into tenants/ (D2 convention).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flux-runtime-info
+  namespace: flux-system
+  labels:
+    toolkit.fluxcd.io/runtime: "true"
+    reconcile.fluxcd.io/watch: Enabled
+data:
+  ENVIRONMENT: dev
+  ARTIFACT_TAG: latest                     # dev channel; production would track latest-stable
+  ARTIFACT_OWNER: wrkode
+  ARTIFACT_SUBJECT_WORKFLOW: push-artifact
+  ARTIFACT_SUBJECT_GIT_REF: refs/heads/main

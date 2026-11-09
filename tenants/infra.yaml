@@ -1,0 +1,62 @@
+# Platform-team tenant: one signed OCI source + one Kustomization per infra
+# component, generated from the inputs below. Both live in flux-system and run
+# as kustomize-controller (the platform layer installs CRDs and a Helm release,
+# which needs cluster-wide rights).
+#
+#   kubeswift-platform  ->  KubeSwift chart OCIRepository + HelmRelease
+#   kubeswift-infra     ->  SwiftGuestClass, SwiftImage x2, SwiftSeedProfile
+#                           (Ready only once both golden images are imported)
+apiVersion: fluxcd.controlplane.io/v1
+kind: ResourceSet
+metadata:
+  name: infra
+  namespace: flux-system
+spec:
+  inputs:
+    - component: kubeswift-platform
+      dependsOn: ""
+      timeout: 10m
+    - component: kubeswift-infra
+      dependsOn: kubeswift-platform
+      timeout: 20m
+  resourcesTemplate: |
+    apiVersion: source.toolkit.fluxcd.io/v1
+    kind: OCIRepository
+    metadata:
+      name: << inputs.component >>
+      namespace: flux-system
+    spec:
+      interval: 5m
+      url: oci://ghcr.io/${ARTIFACT_OWNER}/fluxcon-d2-infra/<< inputs.component >>
+      ref:
+        tag: ${ARTIFACT_TAG}
+      verify:
+        provider: cosign
+        matchOIDCIdentity:
+          - issuer: ^https://token\.actions\.githubusercontent\.com$
+            subject: ^https://github\.com/${ARTIFACT_OWNER}/fluxcon-d2-infra/\.github/workflows/${ARTIFACT_SUBJECT_WORKFLOW}\.yaml@${ARTIFACT_SUBJECT_GIT_REF}$
+    ---
+    apiVersion: kustomize.toolkit.fluxcd.io/v1
+    kind: Kustomization
+    metadata:
+      name: << inputs.component >>
+      namespace: flux-system
+    spec:
+      <<- if inputs.dependsOn >>
+      dependsOn:
+        - name: << inputs.dependsOn >>
+      <<- end >>
+      interval: 30m
+      retryInterval: 2m
+      timeout: << inputs.timeout >>
+      sourceRef:
+        kind: OCIRepository
+        name: << inputs.component >>
+      path: ./
+      prune: true
+      wait: true
+      healthCheckExprs:
+        - apiVersion: image.kubeswift.io/v1alpha1
+          kind: SwiftImage
+          current: status.phase == 'Ready'
+          failed: status.phase == 'Failed'
